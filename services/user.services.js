@@ -1,7 +1,7 @@
 const getuser = require("../models/user.model")
 
 
-const getUserDetails = async (req, res) => {
+const getUserDetails = async (req, res, next) => {
     try {
         const { userId } = req.params
 
@@ -18,10 +18,7 @@ const getUserDetails = async (req, res) => {
         })
 
     } catch (error) {
-        console.error("Error getting userDetails:", error.message)
-        res.status(500).json({
-            message: "Internal server error"
-        })
+        next(err)
     }
 }
 

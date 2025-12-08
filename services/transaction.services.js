@@ -4,7 +4,7 @@ const getuser = require("../models/user.model");
 
 
 
-const transferMoney = async (req, res) => {
+const transferMoney = async (req, res, next) => {
     const MAX_TRIES = 3;
 
     for (let trytrans = 0; trytrans < MAX_TRIES; trytrans++) {
@@ -83,10 +83,8 @@ const transferMoney = async (req, res) => {
                 continue;
             } else {
                 connection.release()
-                console.error("Error while transering money: ", err.message)
-                return res.status(500).json({
-                    message: "Internal server error"
-                })
+                next(err)
+
             }
 
         }

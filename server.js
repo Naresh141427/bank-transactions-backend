@@ -10,6 +10,11 @@ const app = express()
 
 app.use(express.json())
 
+app.use((err, req, res, next) => {
+    console.warn("Unhandled error: ", err.message)
+
+})
+
 // user routes
 app.use("/psbank/user", userRouter)
 
