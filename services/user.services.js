@@ -17,7 +17,7 @@ const getUserDetails = async (req, res, next) => {
             user
         })
 
-    } catch (error) {
+    } catch (err) {
         next(err)
     }
 }
