@@ -3,7 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const { testConnection } = require("./db/db");
 const userRouter = require("./routes/user.routes");
-const transferMoney = require("./services/transaction.services");
+const transferRouter = require("./routes/transactions.routes")
 
 const app = express();
 
@@ -11,7 +11,7 @@ app.use(express.json());
 
 // Routes
 app.use("/psbank/user", userRouter);
-app.use("/psbank/transfer", transferMoney);
+app.use("/psbank", transferRouter);
 
 app.get("/", (req, res) => {
     res.send("Banking backend is running");

@@ -1,7 +1,11 @@
-const transferMoney = require("../services/transaction.services")
+const express = require("express")
+
+const { transferMoney, withdrawBalance } = require("../services/transaction.services")
+
 
 const router = express.Router()
 
-router.post("/", transferMoney)
+router.post("/transfer", transferMoney)
+router.post("/:userId/withdraw", withdrawBalance)
 
 module.exports = router

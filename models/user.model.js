@@ -2,12 +2,19 @@ const { pool } = require("../db/db")
 
 const getuser = async (id) => {
     try {
-        const [row] = await pool.query("SELECT name, balance FROM users WHERE id = ?", [id])
-        return row[0]
+        const [row] = await pool.query(
+            "SELECT id, name FROM users WHERE id = ?",
+            [id]
+        );
+
+        return row[0] || null;
+
     } catch (err) {
-        console.error("DB Error: ", err.message);
-        return err
+        console.error("DB Error in getuser():", err.message);
+        throw err;
     }
-}
+};
+
+
 
 module.exports = getuser

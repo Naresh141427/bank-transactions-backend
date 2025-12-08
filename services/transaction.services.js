@@ -1,32 +1,47 @@
+
+const { send } = require("vite");
 const { pool } = require("../db/db");
 const getuser = require("../models/user.model");
 
 const transferMoney = async (req, res, next) => {
     const MAX_TRIES = 3;
-    const { senderId, receiverId, amount } = req.body || {};
+    const { senderId, receiverId, transferAmount } = req.body || {};
+
+    const sender = Number(senderId)
+    const receiver = Number(receiverId)
+    const amount = Number(transferAmount)
 
 
-    if (!senderId || !receiverId || !Number(amount)) {
+
+    if (isNaN(sender) || isNaN(receiver) || isNaN(amount) || sender <= 0 || receiver <= 0 || amount <= 0) {
         return res.status(400).json({
-            message: "All fields are required (senderId, receiverId, amount)"
+            message: "Invalid senderId, receiverId, or amount."
         });
     }
 
-    if (senderId === receiverId) {
+    if (sender === receiver) {
         return res.status(400).json({
             message: "Sender and receiver cannot be the same"
         });
     }
 
 
-    const sender = await getuser(senderId);
-    const receiver = await getuser(receiverId);
+    let checkSender, checkRecevier;
 
-    if (!sender || !receiver) {
+    try {
+        checkSender = await getuser(sender)
+        checkRecevier = await getuser(receiver)
+
+    } catch (err) {
+        return next(err)
+    }
+
+    if (!checkSender || !checkRecevier) {
         return res.status(404).json({
             message: "User details not found"
         });
     }
+
 
     for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
         const connection = await pool.getConnection();
@@ -34,39 +49,54 @@ const transferMoney = async (req, res, next) => {
         try {
             await connection.beginTransaction();
 
-            const first = Math.min(senderId, receiverId);
-            const second = Math.max(senderId, receiverId);
+            const first = Math.min(sender, receiver);
+            const second = Math.max(sender, receiver);
 
             const [[firstRow]] = await connection.query(
-                "SELECT balance FROM users WHERE id = ? FOR UPDATE",
+                "SELECT id,balance FROM users WHERE id = ? FOR UPDATE",
                 [first]
             );
             const [[secondRow]] = await connection.query(
-                "SELECT balance FROM users WHERE id = ? FOR UPDATE",
+                "SELECT id,balance FROM users WHERE id = ? FOR UPDATE",
                 [second]
             );
 
-            const senderBalance = first === senderId ? firstRow.balance : secondRow.balance;
+            const moneySender = sender === first ? firstRow : secondRow
+            const moneyReceiver = receiver === first ? firstRow : secondRow
 
-            if (senderBalance < amount) {
+
+            const moneySenderBalanceBefore = Number(moneySender.balance)
+            const moneySenderBalanceAfter = moneySenderBalanceBefore - amount
+
+
+            const moneyReceiverBalanceBefore = Number(moneyReceiver.balance)
+            const moneyReceiverBalanceAfter = moneyReceiverBalanceBefore + amount
+
+
+            if (moneySenderBalanceBefore < amount) {
                 await connection.rollback();
                 connection.release();
                 return res.status(400).json({ message: "Insufficient balance" });
             }
 
             await connection.query(
-                "UPDATE users SET balance = balance - ? WHERE id = ?",
-                [amount, senderId]
+                "UPDATE users SET balance = ? WHERE id = ?",
+                [moneySenderBalanceAfter, sender]
             );
 
             await connection.query(
-                "UPDATE users SET balance = balance + ? WHERE id = ?",
-                [amount, receiverId]
+                "UPDATE users SET balance = ? WHERE id = ?",
+                [moneyReceiverBalanceAfter, receiver]
             );
 
             await connection.query(
-                "INSERT INTO transactions(sender_id, receiver_id, amount) VALUES (?, ?, ?)",
-                [senderId, receiverId, amount]
+                "INSERT INTO transactions (user_id, counterparty_id, amount, type, balance_before, balance_after) VALUES (?, ?, ?, 'TRANSFER_SENT', ?, ?)",
+                [sender, receiver, amount, moneySenderBalanceBefore, moneySenderBalanceAfter]
+            );
+
+            await connection.query(
+                "INSERT INTO transactions (user_id, counterparty_id, amount, type, balance_before, balance_after) VALUES (?, ?, ?,'TRANSFER_RECEIVED',  ?, ?)",
+                [receiver, sender, amount, moneyReceiverBalanceBefore, moneyReceiverBalanceAfter]
             );
 
             await connection.commit();
@@ -81,7 +111,7 @@ const transferMoney = async (req, res, next) => {
 
             if (err.code === "ER_LOCK_DEADLOCK") {
                 console.warn(`Deadlock attempt ${attempt}/${MAX_TRIES}. Retrying...`);
-                await new Promise(r => setTimeout(resolve, 500));
+                await new Promise(resolve => setTimeout(resolve, 500));
                 connection.release();
                 continue;
             }
@@ -96,4 +126,85 @@ const transferMoney = async (req, res, next) => {
     });
 };
 
-module.exports = transferMoney;
+
+const withdrawBalance = async (req, res, next) => {
+    const { userId } = req.params;
+    const { withdrawAmount } = req.body;
+
+    const user = Number(userId)
+    const amount = Number(withdrawAmount)
+
+    if (isNaN(user) || isNaN(amount) || user <= 0 || amount <= 0) {
+        return res.status(400).json({
+            message: "please provide a valid userId and amount"
+        })
+    }
+
+    let checkUser
+
+    try {
+        checkUser = await getuser(user)
+
+    } catch (err) {
+        return next(err)
+    }
+
+    if (!checkUser) {
+        return res.status(404).json({
+            message: "user not found"
+        })
+    }
+
+
+    const connection = await pool.getConnection()
+    try {
+
+        await connection.beginTransaction()
+
+        const [[dbUser]] = await connection.query("SELECT name, balance FROM users WHERE id = ? FOR UPDATE", [user])
+
+
+        if (dbUser.balance < amount) {
+            await connection.rollback()
+            connection.release()
+            return res.status(400).json({
+                message: "insufficient balance to withdraw"
+            })
+        }
+
+        const balanceBefore = dbUser.balance
+        const balanceAfter = dbUser.balance - amount
+
+
+        const [result] = await connection.query("UPDATE users SET balance = ? WHERE id = ?", [balanceAfter, user])
+
+        if (result.affectedRows === 0) {
+            await connection.rollback();
+            connection.release();
+            return res.status(500).json({
+                message: "Something went wrong while updating balance"
+            });
+        }
+
+        await connection.query(
+            "INSERT INTO transactions (user_id, counterparty_id, amount, type, balance_before, balance_after) VALUES (?, ?, ?, 'WITHDRAW',?, ?)",
+            [user, null, amount, balanceBefore, balanceAfter]
+        );
+
+        await connection.commit()
+        connection.release()
+
+        return res.status(201).json({
+            message: "amount withdrawal successfull"
+        })
+
+    } catch (err) {
+        await connection.rollback()
+        connection.release()
+        return next(err)
+    }
+}
+
+
+
+module.exports = { transferMoney, withdrawBalance };

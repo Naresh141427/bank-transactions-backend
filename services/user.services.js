@@ -22,4 +22,6 @@ const getUserDetails = async (req, res, next) => {
     }
 }
 
-module.exports = getUserDetails
+
+
+module.exports = getUserDetails 
