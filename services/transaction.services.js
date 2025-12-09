@@ -1,5 +1,4 @@
 
-const { send } = require("vite");
 const { pool } = require("../db/db");
 const getuser = require("../models/user.model");
 
@@ -36,10 +35,27 @@ const transferMoney = async (req, res, next) => {
         return next(err)
     }
 
-    if (!checkSender || !checkRecevier) {
+    if (!checkSender) {
         return res.status(404).json({
-            message: "User details not found"
+            message: "sender user details not found"
         });
+    }
+    if (!checkRecevier) {
+        return res.status(404).json({
+            message: "receiver user details not found"
+        });
+    }
+
+    if (checkSender.status !== "ACTIVE" || checkSender.status === "BLOCKED") {
+        return res.status(401).json({
+            message: "sender account is in inactive or blocked. please activate and try again"
+        })
+    }
+
+    if (checkRecevier.status !== "ACTIVE" || checkRecevier.status === "BLOCKED") {
+        return res.status(401).json({
+            message: "account is in inactive or blocked. please activate and try again"
+        })
     }
 
 
@@ -53,11 +69,11 @@ const transferMoney = async (req, res, next) => {
             const second = Math.max(sender, receiver);
 
             const [[firstRow]] = await connection.query(
-                "SELECT id,balance FROM users WHERE id = ? FOR UPDATE",
+                "SELECT balance FROM users WHERE id = ? FOR UPDATE",
                 [first]
             );
             const [[secondRow]] = await connection.query(
-                "SELECT id,balance FROM users WHERE id = ? FOR UPDATE",
+                "SELECT balance FROM users WHERE id = ? FOR UPDATE",
                 [second]
             );
 
@@ -88,6 +104,11 @@ const transferMoney = async (req, res, next) => {
                 "UPDATE users SET balance = ? WHERE id = ?",
                 [moneyReceiverBalanceAfter, receiver]
             );
+
+            await connection.query(
+                "UPDATE users SET last_activity_date = NOW() WHERE id IN (?,?)",
+                [sender, receiver]
+            )
 
             await connection.query(
                 "INSERT INTO transactions (user_id, counterparty_id, amount, type, balance_before, balance_after) VALUES (?, ?, ?, 'TRANSFER_SENT', ?, ?)",
@@ -127,7 +148,7 @@ const transferMoney = async (req, res, next) => {
 };
 
 
-const withdrawBalance = async (req, res, next) => {
+const withdrawAmount = async (req, res, next) => {
     const { userId } = req.params;
     const { withdrawAmount } = req.body;
 
@@ -155,13 +176,19 @@ const withdrawBalance = async (req, res, next) => {
         })
     }
 
+    if (checkUser.status !== "ACTIVE" || checkUser.status === "BLOCKED") {
+        return res.status(401).json({
+            message: "account is in inactive or blocked. please activate and try again"
+        })
+    }
 
     const connection = await pool.getConnection()
+
     try {
 
         await connection.beginTransaction()
 
-        const [[dbUser]] = await connection.query("SELECT name, balance FROM users WHERE id = ? FOR UPDATE", [user])
+        const [[dbUser]] = await connection.query("SELECT balance FROM users WHERE id = ? FOR UPDATE", [user])
 
 
         if (dbUser.balance < amount) {
@@ -177,6 +204,11 @@ const withdrawBalance = async (req, res, next) => {
 
 
         const [result] = await connection.query("UPDATE users SET balance = ? WHERE id = ?", [balanceAfter, user])
+
+        await connection.query(
+            "UPDATE users SET last_activity_date = NOW() WHERE id = ?",
+            [user]
+        )
 
         if (result.affectedRows === 0) {
             await connection.rollback();
@@ -207,4 +239,92 @@ const withdrawBalance = async (req, res, next) => {
 
 
 
-module.exports = { transferMoney, withdrawBalance };
+const depositAmount = async (req, res, next) => {
+    const { userId } = req.params
+    const { depositAmount } = req.body
+
+    const user = Number(userId)
+    const amount = Number(depositAmount)
+
+    if (isNaN(user) || isNaN(amount) || !user || !amount || amount <= 0) {
+        return res.status(400).json({
+            message: "Please enter valid user id and amount"
+        })
+    }
+
+    let checkUser
+    try {
+        checkUser = await getuser(user)
+    } catch (err) {
+        return next(err)
+    }
+
+
+    if (!checkUser) {
+        return res.status(404).json({
+            message: "User not found"
+        })
+    }
+
+    if (checkUser.status !== "ACTIVE" || checkUser.status === "BLOCKED") {
+        return res.status(401).json({
+            message: "account is in inactive or blocked. please activate and try again"
+        })
+    }
+
+
+    const connection = await pool.getConnection()
+
+    try {
+
+        await connection.beginTransaction()
+
+        const [[dbUser]] = await connection.query("SELECT balance FROM users WHERE id = ? FOR UPDATE", [user])
+
+
+        const userBalanceBeforeDeposit = Number(dbUser.balance)
+        const userBalanceAferDeposit = userBalanceBeforeDeposit + amount
+
+
+        const [result] = await connection.query("UPDATE users SET balance = ? WHERE id= ?", [userBalanceAferDeposit, user])
+
+        await connection.query(
+            "UPDATE users SET last_activity_date = NOW() WHERE id = ?",
+            [user]
+        )
+
+
+        if (result.affectedRows === 0) {
+            await connection.rollback()
+            connection.release()
+            return res.status(500).json({
+                message: "something went wrong while updating amount. please try again"
+            })
+        }
+
+
+
+        await connection.query(
+            `INSERT INTO transactions(user_id, counterparty_id, amount, type,balance_before, balance_after)
+            VALUES(?,?,?,?,?,?)
+            `,
+            [user, null, amount, "DEPOSIT", userBalanceBeforeDeposit, userBalanceAferDeposit]
+        )
+
+        await connection.commit()
+        connection.release()
+
+        return res.status(200).json({
+            message: "Money deposited succussfully"
+        })
+    } catch (err) {
+        connection.rollback()
+        connection.release()
+        return next(err)
+    }
+
+
+}
+
+
+module.exports = { transferMoney, withdrawAmount, depositAmount };

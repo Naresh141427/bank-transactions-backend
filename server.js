@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const express = require("express");
 const { testConnection } = require("./db/db");
+const startInactiveUserJob = require("./cron/inacticeUsers.job")
 const userRouter = require("./routes/user.routes");
 const transferRouter = require("./routes/transactions.routes")
 
@@ -26,10 +27,13 @@ app.use((err, req, res, next) => {
     });
 });
 
+
+
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
     await testConnection();
+    startInactiveUserJob()
     app.listen(PORT, () =>
         console.log(`Server running on port ${PORT}`)
     );
